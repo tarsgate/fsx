@@ -95,7 +95,22 @@ module Misc =
 #endif
 
     let FsxOnlyArguments() =
-        let cmdLineArgs = Environment.GetCommandLineArgs() |> List.ofSeq
+        let cmdLineArgs =
+            Environment.GetCommandLineArgs()
+            // Filter out preferreduilang from script args, see https://github.com/dotnet/fsharp/pull/19151
+            |> Seq.filter(fun arg ->
+                not(
+                    arg.StartsWith(
+                        "--preferreduilang:",
+                        StringComparison.OrdinalIgnoreCase
+                    )
+                    || arg.StartsWith(
+                        "/preferreduilang:",
+                        StringComparison.OrdinalIgnoreCase
+                    )
+                )
+            )
+            |> List.ofSeq
 #if !LEGACY_FRAMEWORK
         if cmdLineArgs.Length = 0 then
             failwith
