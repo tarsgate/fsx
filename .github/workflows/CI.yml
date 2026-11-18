@@ -41,7 +41,7 @@ jobs:
 
   sanity-check:
     needs:
-    - macOS--dotnet10-and-mono
+    - macOS--dotnet10
     - linux-oldLTS-github--dotnet-and-newmono
     - linux-newLTS-vanilla--dotnet10
     - windows--dotnet10
@@ -81,12 +81,10 @@ jobs:
         dotnet fantomless --recurse .
         git diff --exit-code
 
-  macOS--dotnet10-and-mono:
-    runs-on: macOS-14
+  macOS--dotnet10:
+    runs-on: macOS-15
     steps:
     - uses: actions/checkout@v1
-    - name: check mono version
-      run: mono --version
     - name: Setup .NET SDK 10.0.x
       uses: actions/setup-dotnet@v1.7.2
       with:
