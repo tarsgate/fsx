@@ -353,11 +353,16 @@ Process.Execute(CreateCommand(processTest, String.Empty), Echo.All)
 |> UnwrapDefault
 
 
-(* this is actually only really useful for when process spits both stdout & stderr
-let processConcurrencyTest = Path.Combine(TestDir.FullName, "testProcessConcurrency.fsx") |> FileInfo
-Process.Execute({ Command = processConcurrencyTest.FullName; Arguments = String.Empty }, Echo.All)
-       .UnwrapDefault() |> ignore<string>
-*)
+let processConcurrencyTest =
+    Path.Combine(TestDir.FullName, "testProcessConcurrency.fsx") |> FileInfo
+
+Process
+    .Execute(
+        CreateCommand(processConcurrencyTest, String.Empty),
+        Echo.All
+    )
+    .UnwrapDefault()
+|> ignore<string>
 
 
 let legacyDefineTest =

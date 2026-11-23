@@ -11,31 +11,65 @@ open System.Configuration
 open Fsdk
 open Fsdk.Process
 
+let sourceDir = DirectoryInfo __SOURCE_DIRECTORY__
+
+let sample =
+    Path.Combine(sourceDir.FullName, "testProcessConcurrencySample.fsx")
+    |> FileInfo
+
 let mutable retryCount = 0
+
+let command =
+#if !LEGACY_FRAMEWORK
+    "dotnet"
+#else
+    if Misc.GuessPlatform() = Misc.Platform.Windows then
+        // HACK: we should call fsx here but then we would get this problem in
+        // the tests: error FS0193: The process cannot access the file 'D:\a\fsx\fsx\test\bin\FSharp.Core.dll' because it is being used by another process.
+        match Process.VsWhere "**\\fsi.exe" with
+        | None -> failwith "fsi.exe not found"
+        | Some fsiExe -> fsiExe
+    else
+        // FIXME: extract PREFIX from build.config instead of assuming default
+        "/usr/local/bin/fsx"
+#endif
+
+let validOutputs =
+    [
+        [| "foo"; "bar"; "baz" |]
+        [| "bar"; "foo"; "baz" |]
+        [| "foo"; "baz"; "bar" |]
+    ]
 
 while (retryCount < 20) do //this is a stress test
     let procResult =
         Process.Execute(
             {
-                Command = "fsharpi"
-                Arguments = "test/testProcessConcurrencySample.fsx"
+                Command = command
+#if !LEGACY_FRAMEWORK
+                Arguments = sprintf "fsi %s" sample.FullName
+#else
+                Arguments = sample.FullName
+#endif
             },
             Echo.Off
         )
 
-    let actual =
-        (procResult
-            .UnwrapDefault()
-            .Replace(Environment.NewLine, "-"))
+    let lines =
+        procResult
+            .UnwrapDefault(false)
+            .Split(
+                [| Environment.NewLine; "\n"; "\r\n" |],
+                StringSplitOptions.RemoveEmptyEntries
+            )
 
-    let expected = "foo-bar-baz-"
+    let isValid = validOutputs |> List.exists(fun expected -> lines = expected)
 
-    if (actual <> expected) then
+    if not isValid then
         Console.Error.WriteLine(
             sprintf
-                "Stress test failed, got `%s`, should have been `%s`"
-                actual
-                expected
+                "Stress test failed, got `%A`, expected complete non-interleaved lines"
+                lines
         )
 
         Environment.Exit 1
