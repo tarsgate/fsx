@@ -213,10 +213,10 @@ type Process =
 
         let ReadStandard(std: Process.Standard) =
 
-            let print =
+            let print(str: string) =
                 match std with
-                | Process.Standard.Output -> Console.Write: char -> unit
-                | Process.Standard.Error -> Console.Error.Write
+                | Process.Standard.Output -> Console.Out.Write str
+                | Process.Standard.Error -> Console.Error.Write str
 
             let flush =
                 match std with
@@ -228,105 +228,79 @@ type Process =
                 | Process.Standard.Output -> proc.StandardOutput
                 | Process.Standard.Error -> proc.StandardError
 
-            let ReadIteration() : bool =
-                let append(charToAppend: char) : unit =
+            // I want to hardcode this to 1 because otherwise the order of the stderr|stdout
+            // chunks in the outputbuffer would innecessarily depend on this bufferSize, setting
+            // it to 1 makes it slow but then the order is only relying (in theory) on how the
+            // streams come and how fast the .NET IO processes them
+            let bufferSize = 1
+            let readBuffer = Array.zeroCreate<char> bufferSize
+            let lineBuffer = StringBuilder()
 
-                    let newBuilder = StringBuilder(charToAppend.ToString())
+            let append(chunkString: string) : unit =
+                match outputBuffer with
+                | [] ->
+                    let newBlock =
+                        {
+                            Process.OutputChunk.OutputType = std
+                            Process.OutputChunk.Chunk =
+                                StringBuilder chunkString
+                        }
 
-                    match outputBuffer with
-                    | [] ->
-                        let newBlock =
-                            match std with
-                            | Process.Standard.Output ->
-                                {
-                                    Process.OutputChunk.OutputType =
-                                        Process.Standard.Output
-                                    Process.OutputChunk.Chunk = newBuilder
-                                }
-                            | Process.Standard.Error ->
-                                {
-                                    Process.OutputChunk.OutputType =
-                                        Process.Standard.Error
-                                    Process.OutputChunk.Chunk = newBuilder
-                                }
-
-                        outputBuffer <- List.singleton newBlock
-                    | head :: _tail ->
-                        if head.OutputType = std then
-                            head.Chunk.Append charToAppend |> ignore
-                        else
-                            let newBlock =
-                                {
-                                    Process.OutputChunk.OutputType = std
-                                    Process.OutputChunk.Chunk = newBuilder
-                                }
-
-                            outputBuffer <- newBlock :: outputBuffer
-
-                    if not(echo = Process.Echo.Off) then
-                        print charToAppend
-                        flush()
-
-                // I want to hardcode this to 1 because otherwise the order of the stderr|stdout
-                // chunks in the outputbuffer would innecessarily depend on this bufferSize, setting
-                // it to 1 makes it slow but then the order is only relying (in theory) on how the
-                // streams come and how fast the .NET IO processes them
-                let bufferSize = 1
-
-                // 'x' is a dummy value that will get replaced
-                let outChar = Array.singleton 'x'
-                let uniqueElementIndexInTheSingleCharBuffer = bufferSize - 1
-
-                if not(outChar.Length = bufferSize) then
-                    failwith "Buffer Size must equal current buffer size"
-
-                let readTask =
-                    outputToReadFrom.ReadAsync(
-                        outChar,
-                        uniqueElementIndexInTheSingleCharBuffer,
-                        bufferSize
-                    )
-
-                readTask.Wait()
-
-                if not(readTask.IsCompleted) then
-                    failwith "Failed to read"
-
-                let readCount = readTask.Result
-
-                if (readCount > bufferSize) then
-                    failwith
-                        "StreamReader.Read() should not read more than the bufferSize if we passed the bufferSize as a parameter"
-
-                let singleChar =
-
-                    // meaning readCount < bufferSize (and bufferSize being 1 means readCount=0 or negative)
-                    if readCount <> bufferSize then
-                        None
+                    outputBuffer <- List.singleton newBlock
+                | head :: _tail ->
+                    if head.OutputType = std then
+                        head.Chunk.Append chunkString |> ignore
                     else
-                        outChar.[uniqueElementIndexInTheSingleCharBuffer]
-                        |> Some
+                        let newBlock =
+                            {
+                                Process.OutputChunk.OutputType = std
+                                Process.OutputChunk.Chunk =
+                                    StringBuilder chunkString
+                            }
 
-                match singleChar with
-                | None when
-                    readCount < 0
-                    || (readCount = 0 && outputToReadFrom.EndOfStream)
-                    ->
+                        outputBuffer <- newBlock :: outputBuffer
+
+                if not(echo = Process.Echo.Off) then
+                    print chunkString
+                    flush()
+
+            let flushLineBuffer(emitAll: bool) =
+                let str = lineBuffer.ToString()
+
+                if str.Length > 0 then
+                    let charsToEmit =
+                        if emitAll then
+                            lineBuffer.Clear() |> ignore
+                            str
+                        else
+                            let lastEol = str.LastIndexOf('\n')
+
+                            if lastEol >= 0 then
+                                let emitPart = str.Substring(0, lastEol + 1)
+                                lineBuffer.Remove(0, lastEol + 1) |> ignore
+                                emitPart
+                            elif str.Length >= 65536 then
+                                lineBuffer.Clear() |> ignore
+                                str
+                            else
+                                String.Empty
+
+                    if charsToEmit.Length > 0 then
+                        try
+                            queuedLock.Enter()
+                            append charsToEmit
+                        finally
+                            queuedLock.Exit()
+
+            let ReadIteration() : bool =
+                let readCount = outputToReadFrom.Read(readBuffer, 0, bufferSize)
+
+                if readCount <= 0 then
+                    flushLineBuffer true
                     false
-                | None -> true
-
-                // FIXME: only appending after \n was a previous approach that
-                // helped with the test "testProcessConcurrency.fsx" (it was
-                // passing in Linux, even if it sometimes failed in macOS):
-                //| Some '\n' -> ...
-
-                | Some char ->
-                    try
-                        queuedLock.Enter()
-                        append char
-                    finally
-                        queuedLock.Exit()
-
+                else
+                    lineBuffer.Append(readBuffer, 0, readCount) |> ignore
+                    flushLineBuffer false
                     true
 
             // this is a way to do a `do...while` loop in F#...
